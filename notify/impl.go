@@ -37,10 +37,11 @@ import (
 	"golang.org/x/net/context"
 	"golang.org/x/net/context/ctxhttp"
 
+	"net/textproto"
+
 	"github.com/prometheus/alertmanager/config"
 	"github.com/prometheus/alertmanager/template"
 	"github.com/prometheus/alertmanager/types"
-	"net/textproto"
 )
 
 type notifierConfig interface {
@@ -429,18 +430,30 @@ func NewPagerDuty(c *config.PagerdutyConfig, t *template.Template) *PagerDuty {
 }
 
 const (
-	pagerDutyEventTrigger = "trigger"
-	pagerDutyEventResolve = "resolve"
+	pagerDutyEventTrigger    = "trigger"
+	pagerDutyEventResolve    = "resolve"
+	pagerDutyDefaultSeverity = "critical"
 )
 
 type pagerDutyMessage struct {
-	ServiceKey  string            `json:"service_key"`
-	IncidentKey string            `json:"incident_key"`
-	EventType   string            `json:"event_type"`
+	RoutingKey  string            `json:"routing_key"`
+	DedupKey    string            `json:"dedup_key"`
+	EventAction string            `json:"event_action"`
 	Description string            `json:"description"`
 	Client      string            `json:"client,omitempty"`
 	ClientURL   string            `json:"client_url,omitempty"`
-	Details     map[string]string `json:"details,omitempty"`
+	Payload     *pagerDutyPayload `json:"payload"`
+}
+
+type pagerDutyPayload struct {
+	Summary       string            `json:"summary"`
+	Source        string            `json:"source"`
+	Severity      string            `json:"severity"`
+	Timestamp     string            `json:"timestamp,omitempty"`
+	Component     string            `json:"component,omitempty"`
+	Group         string            `json:"group,omitempty"`
+	Class         string            `json:"class,omitempty"`
+	CustomDetails map[string]string `json:"custom_details,omitempty"`
 }
 
 // Notify implements the Notifier interface.
@@ -454,33 +467,48 @@ func (n *PagerDuty) Notify(ctx context.Context, as ...*types.Alert) (bool, error
 
 	var err error
 	var (
-		alerts    = types.Alerts(as...)
-		data      = n.tmpl.Data(receiverName(ctx), groupLabels(ctx), as...)
-		tmpl      = tmplText(n.tmpl, data, &err)
-		eventType = pagerDutyEventTrigger
+		alerts   = types.Alerts(as...)
+		data     = n.tmpl.Data(receiverName(ctx), groupLabels(ctx), as...)
+		tmpl     = tmplText(n.tmpl, data, &err)
+		eventKey = pagerDutyEventTrigger
 	)
 	if alerts.Status() == model.AlertResolved {
-		eventType = pagerDutyEventResolve
+		eventKey = pagerDutyEventResolve
 	}
 
-	log.With("incident", key).With("eventType", eventType).Debugln("notifying PagerDuty")
+	log.With("incident", key).With("eventKey", eventKey).Debugln("notifying PagerDuty")
 
 	details := make(map[string]string, len(n.conf.Details))
 	for k, v := range n.conf.Details {
 		details[k] = tmpl(v)
 	}
 
-	msg := &pagerDutyMessage{
-		ServiceKey:  tmpl(string(n.conf.ServiceKey)),
-		EventType:   eventType,
-		IncidentKey: hashKey(key),
-		Description: tmpl(n.conf.Description),
-		Details:     details,
+	routingKey := string(n.conf.RoutingKey)
+	if routingKey == "" {
+		routingKey = string(n.conf.ServiceKey)
 	}
-	if eventType == pagerDutyEventTrigger {
+
+	severity := string(n.conf.Severity)
+	if severity == "" {
+		severity = pagerDutyDefaultSeverity
+	}
+
+	msg := &pagerDutyMessage{
+		RoutingKey:  tmpl(routingKey),
+		EventAction: eventKey,
+		DedupKey:    hashKey(key),
+	}
+
+	if eventKey == pagerDutyEventTrigger {
 		msg.Client = tmpl(n.conf.Client)
 		msg.ClientURL = tmpl(n.conf.ClientURL)
+		msg.Payload = &pagerDutyPayload{
+			Summary:  tmpl(n.conf.Description),
+			Source:   tmpl(n.conf.Client),
+			Severity: severity,
+		}
 	}
+
 	if err != nil {
 		return false, err
 	}

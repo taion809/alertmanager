@@ -179,6 +179,9 @@ type PagerdutyConfig struct {
 	NotifierConfig `yaml:",inline" json:",inline"`
 
 	ServiceKey  Secret            `yaml:"service_key,omitempty" json:"service_key,omitempty"`
+	RoutingKey  Secret            `yaml:"routing_key,omitempty" json:"routing_key,omitempty"`
+	Source      string            `yaml:"source,omitempty" json:"source,omitempty"`
+	Severity    string            `yaml:"severity,omitempty" json:"severity,omitempty"`
 	URL         string            `yaml:"url,omitempty" json:"url,omitempty"`
 	Client      string            `yaml:"client,omitempty" json:"client,omitempty"`
 	ClientURL   string            `yaml:"client_url,omitempty" json:"client_url,omitempty"`
